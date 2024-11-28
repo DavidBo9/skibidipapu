@@ -11,17 +11,20 @@
             max-width: 800px;
             margin: 0 auto;
             padding: 20px;
+            background-color: #f5f5f5;
         }
         .section {
             margin-bottom: 30px;
             padding: 20px;
             border: 1px solid #ddd;
             border-radius: 5px;
+            background-color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .results {
             margin-top: 20px;
             padding: 10px;
-            background-color: #f5f5f5;
+            background-color: #f8f9fa;
             border-radius: 5px;
             display: none;
         }
@@ -32,6 +35,7 @@
             border: none;
             border-radius: 4px;
             cursor: pointer;
+            transition: background-color 0.3s;
         }
         button:disabled {
             background-color: #cccccc;
@@ -44,6 +48,10 @@
             width: 100%;
             min-height: 100px;
             margin-bottom: 10px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
         }
         .status {
             padding: 5px 10px;
@@ -58,6 +66,52 @@
         .status.inactive {
             background-color: #f2dede;
             color: #a94442;
+        }
+        .analyzed-image {
+            max-width: 100%;
+            margin: 10px 0;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 10px 0;
+        }
+        .loading:after {
+            content: '';
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .image-container {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: white;
+        }
+        .image-results {
+            margin-top: 10px;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        h1, h2 {
+            color: #333;
         }
     </style>
 </head>
@@ -81,58 +135,41 @@
         </div>
         <input type="file" id="imageInput" multiple accept="image/*" {{ 'disabled' if not face_classifier_status }}>
         <button onclick="analyzeImages()" {{ 'disabled' if not face_classifier_status }}>Analyze Images</button>
+        <div id="loadingIndicator" class="loading"></div>
         <div id="imageResults" class="results"></div>
     </div>
 
     <script>
-        async function analyzeText() {
-            const text = document.getElementById('textInput').value;
-            const resultsDiv = document.getElementById('textResults');
-            
-            try {
-                const formData = new FormData();
-                formData.append('text', text);
-                
-                const response = await fetch('/analyze_text', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const results = await response.json();
-                
-                if (results.error) {
-                    throw new Error(results.error);
-                }
-                
-                resultsDiv.style.display = 'block';
-                resultsDiv.innerHTML = `
-                    <h3>Results:</h3>
-                    <p>Sentiment: ${results.sentiment} (${(results.sentiment_confidence * 100).toFixed(2)}%)</p>
-                    <p>Primary Emotion: ${results.emotion} (${(results.emotion_confidence * 100).toFixed(2)}%)</p>
-                    <h4>Top 3 Emotions:</h4>
-                    <ul>
-                        ${Object.entries(results.top_3_emotions)
-                            .map(([emotion, conf]) => `<li>${emotion}: ${(conf * 100).toFixed(2)}%</li>`)
-                            .join('')}
-                    </ul>
-                `;
-            } catch (error) {
-                resultsDiv.style.display = 'block';
-                resultsDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
-            }
-        }
-
         async function analyzeImages() {
             const input = document.getElementById('imageInput');
             const resultsDiv = document.getElementById('imageResults');
+            const loadingDiv = document.getElementById('loadingIndicator');
             
             if (input.files.length === 0) {
                 resultsDiv.style.display = 'block';
                 resultsDiv.innerHTML = `<p style="color: red;">Please select at least one image</p>`;
                 return;
             }
+    
+            if (input.files.length > 5) {
+                resultsDiv.style.display = 'block';
+                resultsDiv.innerHTML = `<p style="color: red;">Maximum 5 images allowed</p>`;
+                return;
+            }
+    
+            // Check file sizes
+            for (const file of input.files) {
+                if (file.size > 8 * 1024 * 1024) { // 8MB
+                    resultsDiv.style.display = 'block';
+                    resultsDiv.innerHTML = `<p style="color: red;">File ${file.name} is too large. Maximum size is 8MB</p>`;
+                    return;
+                }
+            }
             
             try {
+                loadingDiv.style.display = 'block';
+                resultsDiv.style.display = 'none';
+                
                 const formData = new FormData();
                 for (const file of input.files) {
                     formData.append('files[]', file);
@@ -142,6 +179,10 @@
                     method: 'POST',
                     body: formData
                 });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
                 
                 const results = await response.json();
                 
@@ -153,14 +194,21 @@
                 resultsDiv.innerHTML = `
                     <h3>Results:</h3>
                     ${results.map(result => `
-                        <div style="margin-bottom: 15px;">
+                        <div class="image-container">
                             <h4>Image: ${result.image}</h4>
                             ${result.error ? 
                                 `<p style="color: red;">Error: ${result.error}</p>` :
-                                `<p>Faces detected: ${result.faces_detected}</p>
-                                 ${result.emotions.map(emotion => `
-                                    <p>Emotion: ${emotion.emotion} (${(emotion.confidence * 100).toFixed(2)}%)</p>
-                                 `).join('')}`
+                                `<div>
+                                    <img src="data:image/jpeg;base64,${result.analyzed_image}" 
+                                         alt="Analyzed ${result.image}" 
+                                         class="analyzed-image">
+                                    <div class="image-results">
+                                        <p>Faces detected: ${result.faces_detected}</p>
+                                        ${result.emotions.map(emotion => `
+                                            <p>Emotion: ${emotion.emotion} (${(emotion.confidence * 100).toFixed(2)}%)</p>
+                                        `).join('')}
+                                    </div>
+                                </div>`
                             }
                         </div>
                     `).join('')}
@@ -168,6 +216,8 @@
             } catch (error) {
                 resultsDiv.style.display = 'block';
                 resultsDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            } finally {
+                loadingDiv.style.display = 'none';
             }
         }
     </script>

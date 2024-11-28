@@ -4,8 +4,20 @@ import os
 from werkzeug.utils import secure_filename
 import json
 import cv2
+import base64
+import tensorflow as tf
 from tweet_analyzer import TweetAnalyzer
 from batch_classifier import BatchImageClassifier
+
+# Configure GPU memory growth to avoid taking all memory
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print("GPU memory growth enabled")
+    except RuntimeError as e:
+        print(f"Error configuring GPU: {e}")
 
 # Configure application
 app = Flask(__name__)
@@ -21,7 +33,7 @@ os.makedirs(MODELS_FOLDER, exist_ok=True)
 
 # App configuration
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8MB max file size
 
 # Model paths
 TWEET_MODEL_PATH = os.path.join(MODELS_FOLDER, 'analisis_tweets.h5')
@@ -48,9 +60,22 @@ except Exception as e:
     face_classifier = None
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+MAX_IMAGE_SIZE = 800  # Maximum dimension for processed images
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def resize_image(image):
+    height, width = image.shape[:2]
+    if height > MAX_IMAGE_SIZE or width > MAX_IMAGE_SIZE:
+        if height > width:
+            new_height = MAX_IMAGE_SIZE
+            new_width = int(width * (MAX_IMAGE_SIZE / height))
+        else:
+            new_width = MAX_IMAGE_SIZE
+            new_height = int(height * (MAX_IMAGE_SIZE / width))
+        image = cv2.resize(image, (new_width, new_height))
+    return image
 
 @app.route('/')
 def home():
@@ -82,6 +107,9 @@ def analyze_images():
         return jsonify({'error': 'No files uploaded'}), 400
 
     files = request.files.getlist('files[]')
+    if len(files) > 5:
+        return jsonify({'error': 'Maximum 5 images allowed'}), 400
+
     results = []
 
     for file in files:
@@ -96,21 +124,32 @@ def analyze_images():
                 if frame is None:
                     raise ValueError("Failed to load image")
                 
+                # Resize image to reduce memory usage
+                frame = resize_image(frame)
+                
+                # Detect faces and draw predictions
                 faces = face_classifier.detect_faces(frame)
                 face_results = []
                 
                 for face_box in faces:
                     class_idx, confidence = face_classifier.process_face(frame, face_box)
                     if class_idx is not None:
+                        frame = face_classifier.draw_prediction(frame, class_idx, confidence, face_box)
                         face_results.append({
                             'emotion': face_classifier.class_names[class_idx],
                             'confidence': float(confidence)
                         })
                 
+                # Reduce image quality for base64 conversion
+                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+                _, buffer = cv2.imencode('.jpg', frame, encode_param)
+                img_base64 = base64.b64encode(buffer).decode('utf-8')
+                
                 results.append({
                     'image': filename,
                     'faces_detected': len(faces),
-                    'emotions': face_results
+                    'emotions': face_results,
+                    'analyzed_image': img_base64
                 })
                 
             except Exception as e:
@@ -118,11 +157,13 @@ def analyze_images():
                     'image': filename,
                     'error': str(e)
                 })
-            
             finally:
                 # Clean up uploaded file
                 if os.path.exists(filepath):
                     os.remove(filepath)
+                
+        # Clear some memory
+        tf.keras.backend.clear_session()
 
     return jsonify(results)
 
