@@ -1,0 +1,175 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emotion Analysis</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .results {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-radius: 5px;
+            display: none;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        button:hover:not(:disabled) {
+            background-color: #45a049;
+        }
+        textarea {
+            width: 100%;
+            min-height: 100px;
+            margin-bottom: 10px;
+        }
+        .status {
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+        .status.active {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        .status.inactive {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+    </style>
+</head>
+<body>
+    <h1>Emotion Analysis Tool</h1>
+    
+    <div class="section">
+        <h2>Text Analysis</h2>
+        <div class="status {{ 'active' if tweet_analyzer_status else 'inactive' }}">
+            Text Analyzer Status: {{ 'Active' if tweet_analyzer_status else 'Inactive - Model not loaded' }}
+        </div>
+        <textarea id="textInput" placeholder="Enter your text here..."></textarea>
+        <button onclick="analyzeText()" {{ 'disabled' if not tweet_analyzer_status }}>Analyze Text</button>
+        <div id="textResults" class="results"></div>
+    </div>
+
+    <div class="section">
+        <h2>Image Analysis</h2>
+        <div class="status {{ 'active' if face_classifier_status else 'inactive' }}">
+            Face Classifier Status: {{ 'Active' if face_classifier_status else 'Inactive - Model not loaded' }}
+        </div>
+        <input type="file" id="imageInput" multiple accept="image/*" {{ 'disabled' if not face_classifier_status }}>
+        <button onclick="analyzeImages()" {{ 'disabled' if not face_classifier_status }}>Analyze Images</button>
+        <div id="imageResults" class="results"></div>
+    </div>
+
+    <script>
+        async function analyzeText() {
+            const text = document.getElementById('textInput').value;
+            const resultsDiv = document.getElementById('textResults');
+            
+            try {
+                const formData = new FormData();
+                formData.append('text', text);
+                
+                const response = await fetch('/analyze_text', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const results = await response.json();
+                
+                if (results.error) {
+                    throw new Error(results.error);
+                }
+                
+                resultsDiv.style.display = 'block';
+                resultsDiv.innerHTML = `
+                    <h3>Results:</h3>
+                    <p>Sentiment: ${results.sentiment} (${(results.sentiment_confidence * 100).toFixed(2)}%)</p>
+                    <p>Primary Emotion: ${results.emotion} (${(results.emotion_confidence * 100).toFixed(2)}%)</p>
+                    <h4>Top 3 Emotions:</h4>
+                    <ul>
+                        ${Object.entries(results.top_3_emotions)
+                            .map(([emotion, conf]) => `<li>${emotion}: ${(conf * 100).toFixed(2)}%</li>`)
+                            .join('')}
+                    </ul>
+                `;
+            } catch (error) {
+                resultsDiv.style.display = 'block';
+                resultsDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+
+        async function analyzeImages() {
+            const input = document.getElementById('imageInput');
+            const resultsDiv = document.getElementById('imageResults');
+            
+            if (input.files.length === 0) {
+                resultsDiv.style.display = 'block';
+                resultsDiv.innerHTML = `<p style="color: red;">Please select at least one image</p>`;
+                return;
+            }
+            
+            try {
+                const formData = new FormData();
+                for (const file of input.files) {
+                    formData.append('files[]', file);
+                }
+                
+                const response = await fetch('/analyze_images', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const results = await response.json();
+                
+                if (results.error) {
+                    throw new Error(results.error);
+                }
+                
+                resultsDiv.style.display = 'block';
+                resultsDiv.innerHTML = `
+                    <h3>Results:</h3>
+                    ${results.map(result => `
+                        <div style="margin-bottom: 15px;">
+                            <h4>Image: ${result.image}</h4>
+                            ${result.error ? 
+                                `<p style="color: red;">Error: ${result.error}</p>` :
+                                `<p>Faces detected: ${result.faces_detected}</p>
+                                 ${result.emotions.map(emotion => `
+                                    <p>Emotion: ${emotion.emotion} (${(emotion.confidence * 100).toFixed(2)}%)</p>
+                                 `).join('')}`
+                            }
+                        </div>
+                    `).join('')}
+                `;
+            } catch (error) {
+                resultsDiv.style.display = 'block';
+                resultsDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>
