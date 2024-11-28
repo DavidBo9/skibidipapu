@@ -6,10 +6,16 @@ import json
 import cv2
 import base64
 import tensorflow as tf
+from openai import OpenAI
+from dotenv import load_dotenv
 from tweet_analyzer import TweetAnalyzer
 from batch_classifier import BatchImageClassifier
 
-# Configure GPU memory growth to avoid taking all memory
+# Load environment variables
+load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Configure GPU memory growth
 gpus = tf.config.experimental.list_physical_devices('GPU')
 if gpus:
     try:
@@ -19,8 +25,9 @@ if gpus:
     except RuntimeError as e:
         print(f"Error configuring GPU: {e}")
 
-# Configure application
+# Initialize Flask and OpenAI
 app = Flask(__name__)
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Configure file paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,7 +47,7 @@ TWEET_MODEL_PATH = os.path.join(MODELS_FOLDER, 'analisis_tweets.h5')
 EMOTION_MODEL_PATH = os.path.join(MODELS_FOLDER, 'emotion_classifier_v3.h5')
 FACE_MODEL_PATH = os.path.join(MODELS_FOLDER, 'emotion_region_classifier.h5')
 
-# Initialize analyzers with error handling
+# Initialize analyzers
 try:
     tweet_analyzer = TweetAnalyzer()
     print("Tweet analyzer initialized successfully")
@@ -60,7 +67,7 @@ except Exception as e:
     face_classifier = None
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
-MAX_IMAGE_SIZE = 800  # Maximum dimension for processed images
+MAX_IMAGE_SIZE = 800
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -76,6 +83,52 @@ def resize_image(image):
             new_height = int(height * (MAX_IMAGE_SIZE / width))
         image = cv2.resize(image, (new_width, new_height))
     return image
+
+def get_ai_recommendations(text_results, image_results):
+    try:
+        text_sentiment = text_results.get('sentiment', 'unknown')
+        text_emotion = text_results.get('emotion', 'unknown')
+        
+        face_emotion = 'unknown'
+        if image_results and 'emotions' in image_results and image_results['emotions']:
+            face_emotion = image_results['emotions'][0].get('emotion', 'unknown')
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4-turbo-preview",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """
+                    You are an empathetic AI consultant analyzing emotional states from text and facial expressions.
+                    Provide personalized recommendations based on the emotional analysis results.
+                    Include:
+                    1. A brief analysis of the emotional state
+                    2. 2-3 specific activity recommendations
+                    3. A positive, encouraging message
+                    
+                    Keep responses concise but meaningful, about 3-4 sentences.
+                    Focus on constructive, helpful suggestions that could improve the person's emotional well-being.
+                    """
+                },
+                {
+                    "role": "user",
+                    "content": f"""
+                    Text Analysis Results:
+                    - Sentiment: {text_sentiment}
+                    - Primary Text Emotion: {text_emotion}
+                    - Facial Expression: {face_emotion}
+                    
+                    Please provide a personalized analysis and recommendations.
+                    """
+                }
+            ],
+            temperature=0.7,
+            max_tokens=300
+        )
+        
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Error generating recommendations: {str(e)}"
 
 @app.route('/')
 def home():
@@ -124,10 +177,7 @@ def analyze_images():
                 if frame is None:
                     raise ValueError("Failed to load image")
                 
-                # Resize image to reduce memory usage
                 frame = resize_image(frame)
-                
-                # Detect faces and draw predictions
                 faces = face_classifier.detect_faces(frame)
                 face_results = []
                 
@@ -140,7 +190,6 @@ def analyze_images():
                             'confidence': float(confidence)
                         })
                 
-                # Reduce image quality for base64 conversion
                 encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
                 _, buffer = cv2.imencode('.jpg', frame, encode_param)
                 img_base64 = base64.b64encode(buffer).decode('utf-8')
@@ -158,19 +207,32 @@ def analyze_images():
                     'error': str(e)
                 })
             finally:
-                # Clean up uploaded file
                 if os.path.exists(filepath):
                     os.remove(filepath)
                 
-        # Clear some memory
         tf.keras.backend.clear_session()
 
     return jsonify(results)
 
+@app.route('/analyze_combined', methods=['POST'])
+def analyze_combined():
+    if 'text_results' not in request.json or 'image_results' not in request.json:
+        return jsonify({'error': 'Missing required data'}), 400
+        
+    try:
+        text_results = request.json['text_results']
+        image_results = request.json['image_results']
+        
+        recommendations = get_ai_recommendations(text_results, image_results)
+        
+        return jsonify({
+            'text_analysis': text_results,
+            'image_analysis': image_results,
+            'ai_recommendations': recommendations
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
-    print(f"\nModel paths:")
-    print(f"Tweet model path: {TWEET_MODEL_PATH}")
-    print(f"Emotion model path: {EMOTION_MODEL_PATH}")
-    print(f"Face model path: {FACE_MODEL_PATH}")
-    
     app.run(debug=True)

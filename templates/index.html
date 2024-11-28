@@ -1,10 +1,9 @@
-<!-- templates/index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Emotion Analysis</title>
+    <title>Emotion Analysis with AI Recommendations</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -102,6 +101,18 @@
         .image-results {
             margin-top: 10px;
         }
+        .ai-recommendations {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #4CAF50;
+        }
+        .recommendation-content {
+            font-size: 16px;
+            line-height: 1.6;
+            color: #333;
+        }
         input[type="file"] {
             margin: 10px 0;
             padding: 10px;
@@ -116,7 +127,7 @@
     </style>
 </head>
 <body>
-    <h1>Emotion Analysis Tool</h1>
+    <h1>Emotion Analysis with AI Recommendations</h1>
     
     <div class="section">
         <h2>Text Analysis</h2>
@@ -139,7 +150,60 @@
         <div id="imageResults" class="results"></div>
     </div>
 
+    <div id="aiRecommendations" class="section" style="display: none;">
+        <h2>AI Recommendations</h2>
+        <div id="recommendationContent"></div>
+    </div>
+
     <script>
+        // Store analysis results
+        let lastTextResults = null;
+        let lastImageResults = null;
+
+        async function analyzeText() {
+            const text = document.getElementById('textInput').value;
+            const resultsDiv = document.getElementById('textResults');
+            
+            try {
+                const formData = new FormData();
+                formData.append('text', text);
+                
+                const response = await fetch('/analyze_text', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const results = await response.json();
+                
+                if (results.error) {
+                    throw new Error(results.error);
+                }
+                
+                lastTextResults = results;
+                
+                resultsDiv.style.display = 'block';
+                resultsDiv.innerHTML = `
+                    <h3>Results:</h3>
+                    <p>Sentiment: ${results.sentiment} (${(results.sentiment_confidence * 100).toFixed(2)}%)</p>
+                    <p>Primary Emotion: ${results.emotion} (${(results.emotion_confidence * 100).toFixed(2)}%)</p>
+                    <h4>Top 3 Emotions:</h4>
+                    <ul>
+                        ${Object.entries(results.top_3_emotions)
+                            .map(([emotion, conf]) => `<li>${emotion}: ${(conf * 100).toFixed(2)}%</li>`)
+                            .join('')}
+                    </ul>
+                `;
+
+                // Try to get AI recommendations if we have both analyses
+                if (lastImageResults) {
+                    await getAIRecommendations();
+                }
+            } catch (error) {
+                resultsDiv.style.display = 'block';
+                resultsDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+
         async function analyzeImages() {
             const input = document.getElementById('imageInput');
             const resultsDiv = document.getElementById('imageResults');
@@ -150,20 +214,11 @@
                 resultsDiv.innerHTML = `<p style="color: red;">Please select at least one image</p>`;
                 return;
             }
-    
+
             if (input.files.length > 5) {
                 resultsDiv.style.display = 'block';
                 resultsDiv.innerHTML = `<p style="color: red;">Maximum 5 images allowed</p>`;
                 return;
-            }
-    
-            // Check file sizes
-            for (const file of input.files) {
-                if (file.size > 8 * 1024 * 1024) { // 8MB
-                    resultsDiv.style.display = 'block';
-                    resultsDiv.innerHTML = `<p style="color: red;">File ${file.name} is too large. Maximum size is 8MB</p>`;
-                    return;
-                }
             }
             
             try {
@@ -180,15 +235,13 @@
                     body: formData
                 });
                 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
                 const results = await response.json();
                 
                 if (results.error) {
                     throw new Error(results.error);
                 }
+
+                lastImageResults = results[0]; // Store first image results
                 
                 resultsDiv.style.display = 'block';
                 resultsDiv.innerHTML = `
@@ -213,11 +266,49 @@
                         </div>
                     `).join('')}
                 `;
+
+                // Try to get AI recommendations if we have both analyses
+                if (lastTextResults) {
+                    await getAIRecommendations();
+                }
             } catch (error) {
                 resultsDiv.style.display = 'block';
                 resultsDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
             } finally {
                 loadingDiv.style.display = 'none';
+            }
+        }
+
+        async function getAIRecommendations() {
+            try {
+                const response = await fetch('/analyze_combined', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        text_results: lastTextResults,
+                        image_results: lastImageResults
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.error) {
+                    throw new Error(result.error);
+                }
+
+                // Display AI recommendations
+                const recommendationsDiv = document.getElementById('aiRecommendations');
+                const contentDiv = document.getElementById('recommendationContent');
+                recommendationsDiv.style.display = 'block';
+                contentDiv.innerHTML = `
+                    <div class="recommendation-content">
+                        ${result.ai_recommendations}
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error getting AI recommendations:', error);
             }
         }
     </script>
